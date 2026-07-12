@@ -12,7 +12,10 @@ metadata:
   name: {{ include "harvester-networkfs-manager.name" . }}
 rules:
   - apiGroups: [ "" ]
-    resources: [ "services", "endpoints", "persistentvolumes" ]
+    resources: [ "services", "persistentvolumes" ]
+    verbs: [ "get", "watch", "list" ]
+  - apiGroups: [ "discovery.k8s.io" ]
+    resources: [ "endpointslices" ]
     verbs: [ "get", "watch", "list" ]
   - apiGroups: [ "harvesterhci.io" ]
     resources: [ "networkfilesystems", "networkfilesystems/status" ]
