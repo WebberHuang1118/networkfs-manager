@@ -8,8 +8,10 @@ import (
 	longhornv2 "github.com/longhorn/longhorn-manager/k8s/pkg/apis/longhorn/v1beta2"
 	lhclientset "github.com/longhorn/longhorn-manager/k8s/pkg/client/clientset/versioned"
 	ctlv1 "github.com/rancher/wrangler/v3/pkg/generated/controllers/core/v1"
+	ctldiscoveryv1 "github.com/rancher/wrangler/v3/pkg/generated/controllers/discovery/v1"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -22,11 +24,11 @@ type Controller struct {
 	namespace string
 	nodeName  string
 
-	coreClient        ctlv1.Interface
-	lhClient          *lhclientset.Clientset
-	endpointsClient   ctlv1.EndpointsController
-	NetworkFSCache    ctlntefsv1.NetworkFilesystemCache
-	NetworkFilsystems ctlntefsv1.NetworkFilesystemController
+	coreClient          ctlv1.Interface
+	lhClient            *lhclientset.Clientset
+	endpointSliceClient ctldiscoveryv1.EndpointSliceController
+	NetworkFSCache      ctlntefsv1.NetworkFilesystemCache
+	NetworkFilsystems   ctlntefsv1.NetworkFilesystemController
 }
 
 const (
@@ -34,16 +36,16 @@ const (
 )
 
 // Register register the longhorn node CRD controller
-func Register(ctx context.Context, coreClient ctlv1.Interface, lhClient *lhclientset.Clientset, endpoints ctlv1.EndpointsController, netfilesystems ctlntefsv1.NetworkFilesystemController, opt *utils.Option) error {
+func Register(ctx context.Context, coreClient ctlv1.Interface, lhClient *lhclientset.Clientset, endpointSlices ctldiscoveryv1.EndpointSliceController, netfilesystems ctlntefsv1.NetworkFilesystemController, opt *utils.Option) error {
 
 	c := &Controller{
-		namespace:         opt.Namespace,
-		nodeName:          opt.NodeName,
-		coreClient:        coreClient,
-		lhClient:          lhClient,
-		endpointsClient:   endpoints,
-		NetworkFilsystems: netfilesystems,
-		NetworkFSCache:    netfilesystems.Cache(),
+		namespace:           opt.Namespace,
+		nodeName:            opt.NodeName,
+		coreClient:          coreClient,
+		lhClient:            lhClient,
+		endpointSliceClient: endpointSlices,
+		NetworkFilsystems:   netfilesystems,
+		NetworkFSCache:      netfilesystems.Cache(),
 	}
 
 	c.NetworkFilsystems.OnChange(ctx, netFSHandlerName, c.OnNetworkFSChange)
@@ -167,21 +169,32 @@ func (c *Controller) enableNetworkFS(networkFS *networkfsv1.NetworkFilesystem) (
 		}
 		netFSEndpoint = service.Spec.ClusterIP
 	} else {
-		endpoint, err := c.endpointsClient.Get(utils.LHNameSpace, networkFS.Name, metav1.GetOptions{})
-		if err != nil && !errors.IsNotFound(err) {
-			logrus.Errorf("Failed to get endpoint %s: %v", networkFS.Name, err)
+		endpointSlices, err := c.endpointSliceClient.List(utils.LHNameSpace, metav1.ListOptions{
+			LabelSelector: discoveryv1.LabelServiceName + "=" + networkFS.Name,
+		})
+		if err != nil {
+			logrus.Errorf("Failed to list endpointslices of service %s: %v", networkFS.Name, err)
+			return nil, err
 		}
-		if len(endpoint.Subsets) == 0 {
-			logrus.Infof("Endpoint %s has no subsets (not ready), skip this round!", networkFS.Name)
+		if len(endpointSlices.Items) == 0 {
+			logrus.Infof("Service %s has no endpointslice (not ready), skip this round!", networkFS.Name)
 			return nil, nil
 		}
-		if len(endpoint.Subsets) > 1 || len(endpoint.Subsets[0].Addresses) > 1 || len(endpoint.Subsets[0].Ports) > 1 {
-			return nil, fmt.Errorf("endpoint %s has more than one subSets", networkFS.Name)
+		if len(endpointSlices.Items) > 1 {
+			return nil, fmt.Errorf("service %s has more than one endpointslice", networkFS.Name)
 		}
-		if endpoint.Subsets[0].Ports[0].Name != "nfs" {
-			return nil, fmt.Errorf("endpoint %s has no nfs port", networkFS.Name)
+		endpointSlice := &endpointSlices.Items[0]
+		if len(endpointSlice.Endpoints) == 0 || len(endpointSlice.Endpoints[0].Addresses) == 0 {
+			logrus.Infof("EndpointSlice of service %s has no endpoints (not ready), skip this round!", networkFS.Name)
+			return nil, nil
 		}
-		netFSEndpoint = endpoint.Subsets[0].Addresses[0].IP
+		if len(endpointSlice.Endpoints) > 1 || len(endpointSlice.Endpoints[0].Addresses) > 1 || len(endpointSlice.Ports) > 1 {
+			return nil, fmt.Errorf("endpointslice of service %s has more than one endpoint", networkFS.Name)
+		}
+		if len(endpointSlice.Ports) == 0 || endpointSlice.Ports[0].Name == nil || *endpointSlice.Ports[0].Name != "nfs" {
+			return nil, fmt.Errorf("endpointslice of service %s has no nfs port", networkFS.Name)
+		}
+		netFSEndpoint = endpointSlice.Endpoints[0].Addresses[0]
 	}
 
 	pv, err := c.coreClient.PersistentVolume().Get(networkFS.Name, metav1.GetOptions{})

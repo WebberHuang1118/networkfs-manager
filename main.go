@@ -13,6 +13,7 @@ import (
 
 	lhclientset "github.com/longhorn/longhorn-manager/k8s/pkg/client/clientset/versioned"
 	corev1 "github.com/rancher/wrangler/v3/pkg/generated/controllers/core"
+	discoveryv1 "github.com/rancher/wrangler/v3/pkg/generated/controllers/discovery"
 	"github.com/rancher/wrangler/v3/pkg/kubeconfig"
 	"github.com/rancher/wrangler/v3/pkg/leader"
 	"github.com/rancher/wrangler/v3/pkg/signals"
@@ -21,7 +22,7 @@ import (
 	"github.com/urfave/cli/v2"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/harvester/networkfs-manager/pkg/controller/endpoint"
+	"github.com/harvester/networkfs-manager/pkg/controller/endpointslice"
 	"github.com/harvester/networkfs-manager/pkg/controller/networkfilesystem"
 	"github.com/harvester/networkfs-manager/pkg/controller/service"
 	"github.com/harvester/networkfs-manager/pkg/controller/sharemanager"
@@ -105,7 +106,12 @@ func run(opt *utils.Option) error {
 
 	clientv1, err := corev1.NewFactoryFromConfig(config)
 	if err != nil {
-		return fmt.Errorf("failed to create endpoints controller: %v", err)
+		return fmt.Errorf("failed to create core controller: %v", err)
+	}
+
+	clientDiscoveryv1, err := discoveryv1.NewFactoryFromConfig(config)
+	if err != nil {
+		return fmt.Errorf("failed to create endpointslices controller: %v", err)
 	}
 
 	lhClient, err := lhclientset.NewForConfig(config)
@@ -118,21 +124,21 @@ func run(opt *utils.Option) error {
 		return fmt.Errorf("failed to create longhorn controller: %v", err)
 	}
 
-	endpoints := clientv1.Core().V1().Endpoints()
+	endpointSlices := clientDiscoveryv1.Discovery().V1().EndpointSlice()
 	services := clientv1.Core().V1().Service()
 	networkFilsystems := clientNetfs.Harvesterhci().V1beta1().NetworkFilesystem()
 	sharemanagers := lhCtrlClient.Longhorn().V1beta2().ShareManager()
 
 	cb := func(ctx context.Context) {
-		if err := endpoint.Register(ctx, endpoints, networkFilsystems, services, opt); err != nil {
-			logrus.Errorf("failed to register endpoint controller: %v", err)
+		if err := endpointslice.Register(ctx, endpointSlices, networkFilsystems, services, opt); err != nil {
+			logrus.Errorf("failed to register endpointslice controller: %v", err)
 		}
 
 		if err := service.Register(ctx, services, networkFilsystems, opt); err != nil {
 			logrus.Errorf("failed to register service controller: %v", err)
 		}
 
-		if err := networkfilesystem.Register(ctx, clientv1.Core().V1(), lhClient, endpoints, networkFilsystems, opt); err != nil {
+		if err := networkfilesystem.Register(ctx, clientv1.Core().V1(), lhClient, endpointSlices, networkFilsystems, opt); err != nil {
 			logrus.Errorf("failed to register networkfilesystem controller: %v", err)
 		}
 
@@ -140,7 +146,7 @@ func run(opt *utils.Option) error {
 			logrus.Errorf("failed to register sharemanager controller: %v", err)
 		}
 
-		if err := start.All(ctx, opt.Threadiness, clientNetfs, clientv1, lhCtrlClient); err != nil {
+		if err := start.All(ctx, opt.Threadiness, clientNetfs, clientv1, clientDiscoveryv1, lhCtrlClient); err != nil {
 			logrus.Errorf("failed to start controller: %v", err)
 		}
 
