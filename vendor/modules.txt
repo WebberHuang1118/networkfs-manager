@@ -126,6 +126,8 @@ github.com/rancher/wrangler/v3/pkg/data
 github.com/rancher/wrangler/v3/pkg/data/convert
 github.com/rancher/wrangler/v3/pkg/generated/controllers/core
 github.com/rancher/wrangler/v3/pkg/generated/controllers/core/v1
+github.com/rancher/wrangler/v3/pkg/generated/controllers/discovery
+github.com/rancher/wrangler/v3/pkg/generated/controllers/discovery/v1
 github.com/rancher/wrangler/v3/pkg/generic
 github.com/rancher/wrangler/v3/pkg/gvk
 github.com/rancher/wrangler/v3/pkg/kubeconfig
